@@ -2,7 +2,7 @@ package main
 
 import "math"
 
-const KFactor = 32
+const KFactor = 20
 
 func calcELO(player, opponent int, win bool) int {
 	w := 0
