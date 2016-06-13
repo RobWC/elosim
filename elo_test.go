@@ -46,5 +46,5 @@ func TestExtendedELO(t *testing.T) {
 	unita, unitb = eloBattle(unita, unitb, false)
 	t.Log("A LOST", unita, unitb)
 
-	t.Log("A", unita, "B", unitb, "C", unitc, "D", unitd)
+	t.Log("A", unita, "B", unitb, "C", unitc, "D", unitd, "E", unite)
 }
