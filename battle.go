@@ -14,5 +14,15 @@ func Battle(unita, unitb Unit) *BattleStats {
 
 	// execute battle
 
+	round := 0
+	for {
+		// start round
+
+		if false {
+			break
+		}
+		round = round + 1
+	}
+
 	return bs
 }
