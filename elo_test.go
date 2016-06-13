@@ -3,8 +3,8 @@ package main
 import "testing"
 
 func TestCalcELO(t *testing.T) {
-	p := 1200
-	o := 1100
+	p := 1000
+	o := 1000
 
 	elo := calcELO(p, o, true)
 	t.Log(elo)

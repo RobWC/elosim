@@ -17,6 +17,15 @@ func (f *Fighter) genStats() {
 	s.Health = FigtherBaseHealth
 	s.Mana = FighterBaseMana
 
+	s.Strength = 7
+	s.Body = 6
+
+	s.Dexterity = 6
+	s.Speed = 6
+
+	s.Intelligence = 5
+	s.Knowledge = 5
+
 	s.generated = true
 	f.Stats = s
 }

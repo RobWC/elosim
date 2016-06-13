@@ -1,6 +1,7 @@
 package main
 
 type Stats struct {
+	// resources
 	Health int
 	Mana   int
 
