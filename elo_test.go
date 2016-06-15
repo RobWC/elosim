@@ -82,32 +82,40 @@ type testEloResult struct {
 	oelo int
 }
 
+type player struct {
+	ID      int
+	Wins    int
+	Losses  int
+	Matches int
+	Elo     int
+}
+
 func TestMegaEloContest(t *testing.T) {
 
-	players := 1000
-	playerMap := make(map[int]int)
+	players := 10000
+	playerMap := make(map[int]*player)
 	matchMap := make(map[int]int)
 	combo := make(map[string]int)
 	var eloRank ByElo
 
 	resultChan := make(chan testEloResult)
 
-	for i := 0; i > players; i++ {
-		playerMap[i] = 1050
+	for i := 0; i < players; i++ {
+		playerMap[i] = &player{ID: i, Elo: 1050}
 		matchMap[i] = 0
 	}
 
 	round := 0
-	maxRounds := 20 * players
+	maxRounds := 100 * players
 	var wg sync.WaitGroup
 
 	go func() {
 		for msg := range resultChan {
-			playerMap[msg.p] = msg.pelo
-			playerMap[msg.o] = msg.oelo
+			playerMap[msg.p].Elo = msg.pelo
+			playerMap[msg.o].Elo = msg.oelo
 
-			matchMap[msg.p] = matchMap[msg.p] + 1
-			matchMap[msg.o] = matchMap[msg.o] + 1
+			playerMap[msg.p].Matches = playerMap[msg.p].Matches + 1
+			playerMap[msg.o].Matches = playerMap[msg.o].Matches + 1
 		}
 	}()
 
@@ -116,8 +124,7 @@ func TestMegaEloContest(t *testing.T) {
 		r := testEloResult{}
 		rand.Seed(time.Now().UnixNano())
 		r.p = rand.Intn(players)
-		time.Sleep(4 * time.Nanosecond)
-		rand.Seed(time.Now().UnixNano() / 2)
+		rand.Seed(time.Now().UnixNano() / rand.Int63())
 		r.o = rand.Intn(players)
 
 		combo[strconv.Itoa(r.p)+strconv.Itoa(r.o)] = combo[strconv.Itoa(r.p)+strconv.Itoa(r.o)] + 1
@@ -130,12 +137,16 @@ func TestMegaEloContest(t *testing.T) {
 		go func() {
 
 			defer wg.Done()
-			c := rand.Float64()
 			win := false
-			if c > calcEloWinChance(r.p, r.o) {
+			if rand.Float64() > calcEloWinChance(r.p, r.o) {
 				win = true
+				playerMap[r.p].Wins = playerMap[r.p].Wins + 1
+				playerMap[r.o].Losses = playerMap[r.o].Losses + 1
+			} else {
+				playerMap[r.o].Wins = playerMap[r.o].Wins + 1
+				playerMap[r.p].Losses = playerMap[r.p].Losses + 1
 			}
-			r.pelo, r.oelo = eloBattle(playerMap[r.p], playerMap[r.o], win)
+			r.pelo, r.oelo = eloBattle(playerMap[r.p].Elo, playerMap[r.o].Elo, win)
 
 			resultChan <- r
 		}()
@@ -150,18 +161,38 @@ func TestMegaEloContest(t *testing.T) {
 	wg.Wait()
 
 	for _, v := range playerMap {
-		eloRank = append(eloRank, v)
+		eloRank = append(eloRank, v.Elo)
 	}
 
 	sort.Sort(ByElo(eloRank))
-	t.Log(eloRank)
 
 	calcTotal := 0
-	for _, v := range matchMap {
-		calcTotal = calcTotal + v
+	for _, v := range playerMap {
+		calcTotal = calcTotal + v.Matches
 	}
 	t.Logf("Total Matches %d Total Played %d Last Round %d Total Unique %d\n", maxRounds, calcTotal/2, round, len(combo))
 
+	totalElo := 0
+	maxElo := 0
+	highestEloPlayer := 0
+	minElo := 0
+	for k, v := range playerMap {
+		totalElo = totalElo + v.Elo
+
+		if v.Elo > maxElo {
+			maxElo = v.Elo
+			highestEloPlayer = k
+		}
+
+		if v.Elo < minElo || minElo == 0 {
+			minElo = v.Elo
+		}
+	}
+
+	avgElo := totalElo / len(playerMap)
+
+	t.Logf("Average Elo %d Min Elo %d Max Elo %d", avgElo, minElo, maxElo)
+	t.Logf("Highest Elo player %#v", playerMap[highestEloPlayer])
 	// bucket groups
 	eloBucket := make(map[string]int)
 
@@ -169,19 +200,6 @@ func TestMegaEloContest(t *testing.T) {
 	eloBucket["silver"] = 0
 	eloBucket["gold"] = 0
 
-	for _, v := range playerMap {
-		if v <= eloRank[len(eloRank)-1]/3 {
-			eloBucket["bronze"] = eloBucket["bronze"] + 1
-		} else if v < eloRank[len(eloRank)-1]/2+1 {
-			eloBucket["silver"] = eloBucket["siver"] + 1
-		} else {
-			eloBucket["gold"] = eloBucket["gold"] + 1
-		}
-	}
-
-	for k, v := range eloBucket {
-		t.Logf("Bucket %s Total %d", k, v)
-	}
 	t.Log("Total Players", players)
 
 }
