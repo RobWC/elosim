@@ -90,7 +90,7 @@ type player struct {
 	Elo     int
 }
 
-func TestMegaEloContest(t *testing.T) {
+func testMegaEloContest(t *testing.T) {
 
 	players := 10000
 	playerMap := make(map[int]*player)
