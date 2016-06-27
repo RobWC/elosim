@@ -1,11 +1,6 @@
 package main
 
-import (
-	"math/rand"
-	"sync"
-	"testing"
-	"time"
-)
+import "testing"
 
 func TestBasicEloEloSim(t *testing.T) {
 	baseElo := 1200
@@ -37,6 +32,7 @@ func TestBasicEloEloSim(t *testing.T) {
 func TestRandomMatchMakingEloSim(t *testing.T) {
 	baseElo := 1200
 	es := NewEloSim(baseElo)
+	es.Start()
 	playerCount := 10000
 	for i := 0; i < playerCount; i++ {
 		es.AddPlayer()
@@ -49,17 +45,15 @@ func TestRandomMatchMakingEloSim(t *testing.T) {
 
 	es.SetMatchMaking(es.RandomSelectPlayers)
 
-	var wg sync.WaitGroup
-	for i := 0; i < 1000; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			time.Sleep(time.Duration(rand.Intn(10)) * time.Nanosecond)
-			m := es.GenerateMatch()
-			t.Logf("%d", m)
-			es.SimMatch(m)
-		}()
+	for i := 0; i < 100000; i++ {
+		m := es.GenerateMatch()
+		es.SimMatch(m)
 	}
-	wg.Wait()
-	t.Logf("Unique Matches %d Players %d", len(es.UniqueMatches), len(es.Players))
+	es.Stop()
+	//	for i := range es.MatchHistory {
+	//		t.Logf("%#v", es.MatchHistory[i])
+	//nid := fmt.Sprintf("%X%X", es.MatchHistory[i].TeamA[0], es.MatchHistory[i].TeamB[0])
+	//t.Log(es.UniqueMatches[nid])
+	//	}
+	t.Logf("%#v", es.FinalReport())
 }
