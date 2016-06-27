@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 type Player struct {
 	ID        uint64
@@ -8,4 +11,14 @@ type Player struct {
 	Elo       int
 	Wins      uint
 	Losses    uint
+	InGame    bool
+	sync.Mutex
+}
+
+func (p *Player) StartGame() {
+	p.InGame = true
+}
+
+func (p *Player) EndGame() {
+	p.InGame = false
 }

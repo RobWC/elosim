@@ -23,6 +23,11 @@ type EloSim struct {
 	wg             sync.WaitGroup
 	StartTime      time.Time
 	EndTime        time.Time
+
+	playerUpdate        chan *Player
+	getPlayer           chan *playerRequest
+	updateMatch         chan *Match
+	updateUniqueMatches chan string
 }
 
 type playerRequest struct {
@@ -38,17 +43,73 @@ type matchResult struct {
 // Create a new sim and set the base elo with be
 func NewEloSim(be int) *EloSim {
 	return &EloSim{Players: make(map[uint64]*Player),
-		MatchHistory:  make(map[uint64]*Match),
-		UniqueMatches: make(map[string]int),
-		BaseElo:       be}
+		MatchHistory:        make(map[uint64]*Match),
+		UniqueMatches:       make(map[string]int),
+		playerUpdate:        make(chan *Player, 1000000),
+		getPlayer:           make(chan *playerRequest, 1000000),
+		updateMatch:         make(chan *Match, 1000000),
+		updateUniqueMatches: make(chan string, 1000000),
+		BaseElo:             be}
 }
 
 // Start set elo sim background tasks
 func (es *EloSim) Start() {
 	es.StartTime = time.Now()
+
+	go func() {
+		for {
+			select {
+			case msg := <-es.playerUpdate:
+				es.Players[msg.ID] = msg
+				es.wg.Done()
+			case msg := <-es.getPlayer:
+				msg.ret <- es.Players[msg.ID]
+				es.wg.Done()
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case msg := <-es.updateMatch:
+				es.MatchHistory[msg.ID] = msg
+				es.wg.Done()
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case msg := <-es.updateUniqueMatches:
+				es.UniqueMatches[msg] = es.UniqueMatches[msg] + 1
+				es.wg.Done()
+			}
+		}
+	}()
+
+}
+
+func (es *EloSim) GetPlayer(id uint64) *Player {
+	es.wg.Add(1)
+	pr := &playerRequest{ID: id, ret: make(chan *Player)}
+	es.getPlayer <- pr
+	return <-pr.ret
+}
+
+func (es *EloSim) UpdatePlayer(p *Player) {
+	es.wg.Add(1)
+	es.playerUpdate <- p
+}
+
+func (es *EloSim) UpdateUniqueMatch(m string) {
+	es.wg.Add(1)
+	es.updateUniqueMatches <- m
 }
 
 func (es *EloSim) Stop() {
+	es.wg.Wait()
 	es.EndTime = time.Now()
 }
 
@@ -78,6 +139,11 @@ func (es *EloSim) AddPlayer() uint64 {
 		es.AddPlayer()
 	}
 	return newID
+}
+
+func (es *EloSim) AddMatch(m *Match) {
+	es.wg.Add(1)
+	es.updateMatch <- m
 }
 
 // SetMatchMaking set the match making method to generate a PendingMatch
@@ -110,17 +176,13 @@ func (es *EloSim) SimMatch(pm *PendingMatch) {
 	if len(match.TeamA) == 1 && len(match.TeamB) == 1 {
 		win := false
 
-		pa := es.Players[match.TeamA[0]]
-		pb := es.Players[match.TeamB[0]]
+		pa := es.GetPlayer(match.TeamA[0])
+		pb := es.GetPlayer(match.TeamB[0])
 
-		if pa == nil || pb == nil {
-			println("Match error", pa, pb, match.TeamA[0], match.TeamB[0])
-			return
-		}
-
+		pa.StartGame()
+		pb.StartGame()
 		// add unique match check
-		u := fmt.Sprintf("%X%X", match.TeamA[0], match.TeamB[0])
-		es.UniqueMatches[u] = es.UniqueMatches[u] + 1
+		es.UpdateUniqueMatch(fmt.Sprintf("%X%X", match.TeamA[0], match.TeamB[0]))
 
 		if rand.Float64() > calcEloWinChance(pa.Elo, pb.Elo) {
 			win = true
@@ -134,13 +196,16 @@ func (es *EloSim) SimMatch(pm *PendingMatch) {
 		}
 		pa.Elo, pb.Elo = eloBattle(pa.Elo, pb.Elo, win)
 		// add match history
-		es.Players[pa.ID] = pa
-		es.Players[pb.ID] = pb
+		es.UpdatePlayer(pa)
+		es.UpdatePlayer(pb)
+		pa.EndGame()
+		pb.EndGame()
 
 	}
 
 	match.Stop()
-	es.MatchHistory[match.ID] = match
+	es.AddMatch(match)
+	es.wg.Done()
 }
 
 type EloSimReport struct {

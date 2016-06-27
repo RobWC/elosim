@@ -30,10 +30,10 @@ func TestBasicEloEloSim(t *testing.T) {
 }
 
 func TestRandomMatchMakingEloSim(t *testing.T) {
-	baseElo := 1200
+	baseElo := 1050
 	es := NewEloSim(baseElo)
 	es.Start()
-	playerCount := 10000
+	playerCount := 1000
 	for i := 0; i < playerCount; i++ {
 		es.AddPlayer()
 	}
@@ -45,9 +45,32 @@ func TestRandomMatchMakingEloSim(t *testing.T) {
 
 	es.SetMatchMaking(es.RandomSelectPlayers)
 
-	for i := 0; i < 100000; i++ {
-		m := es.GenerateMatch()
-		es.SimMatch(m)
+	for i := 0; i < 100; i++ {
+		go func() {
+			for i := 0; i < 1000; i++ {
+				go es.SimMatch(es.GenerateMatch())
+			}
+		}()
+		go func() {
+			for i := 0; i < 1000; i++ {
+				go es.SimMatch(es.GenerateMatch())
+			}
+		}()
+		go func() {
+			for i := 0; i < 1000; i++ {
+				go es.SimMatch(es.GenerateMatch())
+			}
+		}()
+		go func() {
+			for i := 0; i < 1000; i++ {
+				go es.SimMatch(es.GenerateMatch())
+			}
+		}()
+		go func() {
+			for i := 0; i < 1000; i++ {
+				go es.SimMatch(es.GenerateMatch())
+			}
+		}()
 	}
 	es.Stop()
 	//	for i := range es.MatchHistory {
