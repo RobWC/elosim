@@ -1,6 +1,11 @@
 package main
 
-import "time"
+import (
+	"bytes"
+	"encoding/gob"
+	"encoding/json"
+	"time"
+)
 
 type PendingMatch struct {
 	TeamA []uint64
@@ -8,13 +13,13 @@ type PendingMatch struct {
 }
 
 type Match struct {
-	ID        uint64
-	TeamA     []uint64
-	TeamB     []uint64
-	Winner    int
-	Loser     int
-	StartTime time.Time
-	EndTime   time.Time
+	ID        uint64    `json:"id,string"`
+	TeamA     []uint64  `json:"teama"`
+	TeamB     []uint64  `json:"teamb"`
+	Winner    int       `json:"winner"`
+	Loser     int       `json:"loser"`
+	StartTime time.Time `json:"start"`
+	EndTime   time.Time `json:"end"`
 }
 
 func (m *Match) AddPlayers(teamA uint64, teamB uint64) {
@@ -38,4 +43,28 @@ func (m *Match) Start() {
 
 func (m *Match) Stop() {
 	m.EndTime = time.Now()
+}
+
+func (m *Match) GobEncode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	enc := gob.NewEncoder(buf)
+	mj, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	err = enc.Encode(mj)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *Match) GobDecode(data []byte) error {
+	buf := bytes.NewBuffer(data)
+	dec := gob.NewDecoder(buf)
+	err := dec.Decode(&m)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(buf.Bytes(), m)
 }

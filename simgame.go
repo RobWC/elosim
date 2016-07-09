@@ -3,19 +3,26 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/boltdb/bolt"
 )
 
 const (
 	BasePlayerID = 90000
 	IDIncrement  = 32
+	matchHistory = "matchHistory"
+	players      = "players"
+	uniMatches   = "uniqueMatches"
 )
+
+var simDataBuckets = []string{matchHistory, players, uniMatches}
 
 // EloSim an elo simulation system
 type EloSim struct {
 	Players        map[uint64]*Player
-	MatchHistory   map[uint64]*Match
 	UniqueMatches  map[string]int
 	BaseElo        int
 	PendingMatches []*PendingMatch
@@ -28,6 +35,8 @@ type EloSim struct {
 	getPlayer           chan *playerRequest
 	updateMatch         chan *Match
 	updateUniqueMatches chan string
+	db                  *bolt.DB
+	dataBuckets         []string
 }
 
 type playerRequest struct {
@@ -43,23 +52,40 @@ type matchResult struct {
 // Create a new sim and set the base elo with be
 func NewEloSim(be int) *EloSim {
 	return &EloSim{Players: make(map[uint64]*Player),
-		MatchHistory:        make(map[uint64]*Match),
 		UniqueMatches:       make(map[string]int),
 		playerUpdate:        make(chan *Player, 1000000),
 		getPlayer:           make(chan *playerRequest, 1000000),
 		updateMatch:         make(chan *Match, 1000000),
 		updateUniqueMatches: make(chan string, 1000000),
-		BaseElo:             be}
+		BaseElo:             be,
+		dataBuckets:         simDataBuckets}
 }
 
 // Start set elo sim background tasks
 func (es *EloSim) Start() {
 	es.StartTime = time.Now()
 
+	// open database
+	var err error
+	es.db, err = bolt.Open("sim.db", 0600, nil)
+	if err != nil {
+		panic(err)
+	}
+	es.db.Update(func(tx *bolt.Tx) error {
+		for _, v := range es.dataBuckets {
+			_, err := tx.CreateBucketIfNotExists([]byte(v))
+			if err != nil {
+				return fmt.Errorf("unable to create bucket: %s", err)
+			}
+		}
+		return nil
+	})
+
 	go func() {
 		for {
 			select {
 			case msg := <-es.playerUpdate:
+
 				es.Players[msg.ID] = msg
 				es.wg.Done()
 			case msg := <-es.getPlayer:
@@ -73,7 +99,16 @@ func (es *EloSim) Start() {
 		for {
 			select {
 			case msg := <-es.updateMatch:
-				es.MatchHistory[msg.ID] = msg
+				es.db.Update(func(tx *bolt.Tx) error {
+					b := tx.Bucket([]byte(matchHistory))
+					mb, err := msg.GobEncode()
+					if err != nil {
+						println("gob fail")
+						return err
+					}
+					err = b.Put([]byte(strconv.FormatUint(msg.ID, 16)), mb)
+					return nil
+				})
 				es.wg.Done()
 			}
 		}
@@ -228,7 +263,16 @@ func (es *EloSim) FinalReport() *EloSimReport {
 	esr.StartTime = es.StartTime
 	esr.EndTime = es.EndTime
 	esr.TotalPlayers = len(es.Players)
-	esr.TotalMatches = len(es.MatchHistory)
+	err := es.db.View(func(tx *bolt.Tx) error {
+		// Assume bucket exists and has keys
+		b := tx.Bucket([]byte(matchHistory))
+		bs := b.Stats()
+		esr.TotalMatches = bs.KeyN
+		return nil
+	})
+	if err != nil {
+		println(err)
+	}
 	esr.UniqueMatches = len(es.UniqueMatches)
 
 	// determine highest and lowest elo
