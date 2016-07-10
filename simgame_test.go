@@ -1,9 +1,6 @@
 package main
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
 func TestBasicEloEloSim(t *testing.T) {
 	baseElo := 1200
@@ -26,9 +23,9 @@ func TestRandomMatchMakingEloSim(t *testing.T) {
 	baseElo := 1050
 	es := NewEloSim(baseElo, "trmmes.db")
 	es.Start()
-	playerCount := 1000
+	playerCount := 10000
 	for i := 0; i < playerCount; i++ {
-		go es.AddPlayer()
+		es.AddPlayer()
 	}
 	if es.TotalPlayers < playerCount {
 		t.Fail()
@@ -37,8 +34,7 @@ func TestRandomMatchMakingEloSim(t *testing.T) {
 	t.Logf("Found %d players", playerCount)
 
 	es.SetMatchMaking(es.RandomSelectPlayers)
-	for i := 0; i < 1000; i++ {
-		time.Sleep(1 * time.Nanosecond)
+	for i := 0; i < 10000; i++ {
 		es.SimMatch(es.GenerateMatch())
 	}
 

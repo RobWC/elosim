@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/gob"
 	"encoding/json"
 	"time"
 )
@@ -46,25 +44,17 @@ func (m *Match) Stop() {
 }
 
 func (m *Match) GobEncode() ([]byte, error) {
-	buf := new(bytes.Buffer)
-	enc := gob.NewEncoder(buf)
 	mj, err := json.Marshal(m)
 	if err != nil {
 		return nil, err
 	}
-	err = enc.Encode(mj)
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return []byte(mj), nil
 }
 
 func (m *Match) GobDecode(data []byte) error {
-	buf := bytes.NewBuffer(data)
-	dec := gob.NewDecoder(buf)
-	err := dec.Decode(&m)
+	err := json.Unmarshal(data, m)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(buf.Bytes(), m)
+	return nil
 }
