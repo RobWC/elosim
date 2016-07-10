@@ -44,4 +44,4 @@ flycheck_*.el
 # projectiles files
 .projectile
 
-sim.db
+*.db

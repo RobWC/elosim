@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -22,7 +23,6 @@ var simDataBuckets = []string{matchHistory, players, uniMatches}
 
 // EloSim an elo simulation system
 type EloSim struct {
-	Players        map[uint64]*Player
 	UniqueMatches  map[string]int
 	BaseElo        int
 	PendingMatches []*PendingMatch
@@ -32,11 +32,14 @@ type EloSim struct {
 	EndTime        time.Time
 
 	playerUpdate        chan *Player
+	playerAdd           chan *Player
 	getPlayer           chan *playerRequest
 	updateMatch         chan *Match
 	updateUniqueMatches chan string
 	db                  *bolt.DB
 	dataBuckets         []string
+	dbname              string
+	TotalPlayers        int
 }
 
 type playerRequest struct {
@@ -50,14 +53,15 @@ type matchResult struct {
 }
 
 // Create a new sim and set the base elo with be
-func NewEloSim(be int) *EloSim {
-	return &EloSim{Players: make(map[uint64]*Player),
-		UniqueMatches:       make(map[string]int),
+func NewEloSim(be int, dbname string) *EloSim {
+	return &EloSim{UniqueMatches: make(map[string]int),
 		playerUpdate:        make(chan *Player, 1000000),
+		playerAdd:           make(chan *Player, 1000000),
 		getPlayer:           make(chan *playerRequest, 1000000),
 		updateMatch:         make(chan *Match, 1000000),
 		updateUniqueMatches: make(chan string, 1000000),
 		BaseElo:             be,
+		dbname:              dbname,
 		dataBuckets:         simDataBuckets}
 }
 
@@ -67,7 +71,7 @@ func (es *EloSim) Start() {
 
 	// open database
 	var err error
-	es.db, err = bolt.Open("sim.db", 0600, nil)
+	es.db, err = bolt.Open(es.dbname, 0600, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -84,12 +88,49 @@ func (es *EloSim) Start() {
 	go func() {
 		for {
 			select {
-			case msg := <-es.playerUpdate:
+			case msg := <-es.playerAdd:
+				es.db.Update(func(tx *bolt.Tx) error {
+					b := tx.Bucket([]byte(players))
+					mb, err := msg.GobEncode()
+					if err != nil {
+						println("player gob fail")
+						return err
+					}
+					err = b.Put([]byte(strconv.FormatUint(msg.ID, 16)), mb)
 
-				es.Players[msg.ID] = msg
+					es.TotalPlayers = es.TotalPlayers + 1
+					return nil
+				})
+
+				es.wg.Done()
+
+			case msg := <-es.playerUpdate:
+				es.db.Update(func(tx *bolt.Tx) error {
+					b := tx.Bucket([]byte(players))
+					mb, err := msg.GobEncode()
+					if err != nil {
+						println("player gob fail")
+						return err
+					}
+					err = b.Put([]byte(strconv.FormatUint(msg.ID, 16)), mb)
+					bs := b.Stats()
+					es.TotalPlayers = bs.KeyN
+					return nil
+				})
+
 				es.wg.Done()
 			case msg := <-es.getPlayer:
-				msg.ret <- es.Players[msg.ID]
+				es.db.View(func(tx *bolt.Tx) error {
+					b := tx.Bucket([]byte(players))
+					v := b.Get([]byte(strconv.FormatUint(msg.ID, 16)))
+					p := &Player{}
+					err := p.GobDecode(v)
+					if err != nil {
+						return err
+					}
+					msg.ret <- p
+					return nil
+				})
 				es.wg.Done()
 			}
 		}
@@ -138,6 +179,11 @@ func (es *EloSim) UpdatePlayer(p *Player) {
 	es.playerUpdate <- p
 }
 
+func (es *EloSim) addPlayer(p *Player) {
+	es.wg.Add(1)
+	es.playerAdd <- p
+}
+
 func (es *EloSim) UpdateUniqueMatch(m string) {
 	es.wg.Add(1)
 	es.updateUniqueMatches <- m
@@ -150,7 +196,7 @@ func (es *EloSim) Stop() {
 
 // newPlayerID gernerate a new player ID
 func (es *EloSim) newPlayerID() uint64 {
-	return uint64(len(es.Players))
+	return uint64(es.TotalPlayers)
 }
 
 // newMatchID generate a new match ID
@@ -168,11 +214,7 @@ func (es *EloSim) AddPlayer() uint64 {
 	p.CreatedAt = time.Now()
 	p.Elo = es.BaseElo
 	p.ID = newID
-	if _, ok := es.Players[newID]; !ok {
-		es.Players[newID] = p
-	} else {
-		es.AddPlayer()
-	}
+	es.addPlayer(p)
 	return newID
 }
 
@@ -194,11 +236,16 @@ func (es *EloSim) GenerateMatch() *PendingMatch {
 func (es *EloSim) RandomSelectPlayers() *PendingMatch {
 	pa, pb := uint64(0), uint64(0)
 
+	log.Println("TP XXX", es.TotalPlayers)
+	tp := es.TotalPlayers
+	if tp < 2 {
+		tp = 2
+	}
 	rand.Seed(time.Now().UnixNano() * rand.Int63() / 2)
-	pa = uint64(rand.Int63n(int64(len(es.Players) - 1)))
+	pa = uint64(rand.Int63n(int64(tp - 1)))
 
 	rand.Seed(time.Now().UnixNano() * rand.Int63() * 2)
-	pb = uint64(rand.Int63n(int64(len(es.Players) - 1)))
+	pb = uint64(rand.Int63n(int64(tp - 1)))
 
 	return &PendingMatch{TeamA: []uint64{pa}, TeamB: []uint64{pb}}
 }
@@ -262,7 +309,7 @@ func (es *EloSim) FinalReport() *EloSimReport {
 
 	esr.StartTime = es.StartTime
 	esr.EndTime = es.EndTime
-	esr.TotalPlayers = len(es.Players)
+	esr.TotalPlayers = es.TotalPlayers
 	err := es.db.View(func(tx *bolt.Tx) error {
 		// Assume bucket exists and has keys
 		b := tx.Bucket([]byte(matchHistory))
@@ -276,7 +323,7 @@ func (es *EloSim) FinalReport() *EloSimReport {
 	esr.UniqueMatches = len(es.UniqueMatches)
 
 	// determine highest and lowest elo
-	for _, v := range es.Players {
+	/*for _, v := range es.Players {
 		esr.AverageElo = esr.AverageElo + v.Elo
 
 		// check highest elo
@@ -290,20 +337,20 @@ func (es *EloSim) FinalReport() *EloSimReport {
 			esr.LowestEloPlayer = v.ID
 		}
 
-	}
-	esr.AverageElo = esr.AverageElo / len(es.Players)
+	}*/
+	esr.AverageElo = esr.AverageElo / es.TotalPlayers
 
 	// bracket players
 
-	for _, v := range es.Players {
-		if v.Elo <= esr.AverageElo {
-			esr.EloBrackets[0] = esr.EloBrackets[0] + 1
-		} else if v.Elo > esr.AverageElo && v.Elo <= esr.AverageElo+((esr.HighestElo-esr.AverageElo)/3) {
-			esr.EloBrackets[1] = esr.EloBrackets[1] + 1
-		} else if v.Elo > esr.AverageElo+((esr.HighestElo-esr.AverageElo)/3) {
-			esr.EloBrackets[2] = esr.EloBrackets[2] + 1
+	/*	for _, v := range es.Players {
+			if v.Elo <= esr.AverageElo {
+				esr.EloBrackets[0] = esr.EloBrackets[0] + 1
+			} else if v.Elo > esr.AverageElo && v.Elo <= esr.AverageElo+((esr.HighestElo-esr.AverageElo)/3) {
+				esr.EloBrackets[1] = esr.EloBrackets[1] + 1
+			} else if v.Elo > esr.AverageElo+((esr.HighestElo-esr.AverageElo)/3) {
+				esr.EloBrackets[2] = esr.EloBrackets[2] + 1
+			}
 		}
-	}
-
+	*/
 	return esr
 }

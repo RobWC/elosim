@@ -7,40 +7,30 @@ import (
 
 func TestBasicEloEloSim(t *testing.T) {
 	baseElo := 1200
-	es := NewEloSim(baseElo)
-	playerCount := 10000
+	es := NewEloSim(baseElo, "tbees.db")
+	es.Start()
+	playerCount := 100
 	for i := 0; i < playerCount; i++ {
 		es.AddPlayer()
 	}
-	if len(es.Players) < playerCount {
+	if es.TotalPlayers < playerCount {
 		t.Fail()
 	}
 
 	t.Logf("Found %d players", playerCount)
 
-	checkLimit := 0
-	for k, v := range es.Players {
-		if v.Elo != baseElo {
-			t.Fatal("Base Elo Missing")
-		}
-		pt, _ := v.CreatedAt.MarshalText()
-		t.Logf("Player %X %X Created at %s", k, v.ID, pt)
-		if checkLimit == 10 {
-			break
-		}
-		checkLimit = checkLimit + 1
-	}
+	es.Stop()
 }
 
 func TestRandomMatchMakingEloSim(t *testing.T) {
 	baseElo := 1050
-	es := NewEloSim(baseElo)
+	es := NewEloSim(baseElo, "trmmes.db")
 	es.Start()
 	playerCount := 1000
 	for i := 0; i < playerCount; i++ {
-		es.AddPlayer()
+		go es.AddPlayer()
 	}
-	if len(es.Players) < playerCount {
+	if es.TotalPlayers < playerCount {
 		t.Fail()
 	}
 
