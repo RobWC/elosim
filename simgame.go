@@ -126,7 +126,7 @@ func (es *EloSim) Start() {
 					msg.p = r.Value
 					msg.err = r.Error
 				} else {
-					// player already exists
+					// match already exists
 					msg.err = fmt.Error("Match already exists")
 				}
 				msg.ret <- msg.p
