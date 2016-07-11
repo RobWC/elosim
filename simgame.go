@@ -8,14 +8,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boltdb/bolt"
+	"github.com/jinzhu/gorm"
+        _ "github.com/jinzhu/gorm/dialects/sqlite"
 )
 
 const (
 	BasePlayerID = 90000
 	IDIncrement  = 32
 	matchHistory = "matchHistory"
-	players      = "players"
+	players      = "player"s
 	uniMatches   = "uniqueMatches"
 )
 
@@ -32,34 +33,40 @@ type EloSim struct {
 	EndTime        time.Time
 
 	playerUpdate        chan *playerRequest
-	playerAdd           chan *playerRequest
 	getPlayer           chan *playerRequest
 	updateMatch         chan *Match
 	updateUniqueMatches chan string
-	db                  *bolt.DB
+	db                  *gorm.DB
 	dataBuckets         []string
 	dbname              string
 	TotalPlayers        int
 }
 
 type playerRequest struct {
-	ID  uint64
 	p   *Player
 	ret chan *Player
 	err error
 }
 
-type matchResult struct {
-	m    *Match
-	done chan struct{}
+func newPlayerRequest(p *Player) *playerRequest {
+	return &playerRequest{p: p, ret: make(chan *Player)}
+}
+
+type matchRequest struct {
+	m   *Match
+	ret chan *Match
+	err error
+}
+
+func newMatchRequest(m *Match) *matchRequest {
+	return &matchRequest{m: m, ret: make(chan *Match)}
 }
 
 // Create a new sim and set the base elo with be
 func NewEloSim(be int, dbname string) *EloSim {
 	return &EloSim{UniqueMatches: make(map[string]int),
 		playerUpdate:        make(chan *playerRequest, 1000000),
-		playerAdd:           make(chan *playerRequest, 1000000),
-		getPlayer:           make(chan *playerRequest, 1000000),
+ 		getPlayer:           make(chan *playerRequest, 1000000),
 		updateMatch:         make(chan *Match, 1000000),
 		updateUniqueMatches: make(chan string, 1000000),
 		BaseElo:             be,
@@ -73,96 +80,58 @@ func (es *EloSim) Start() {
 
 	// open database
 	var err error
-	es.db, err = bolt.Open(es.dbname, 0600, nil)
+	es.db, err = gorm.Open("sqlite3", es.dbname)
 	if err != nil {
 		panic(err)
 	}
-	es.db.Update(func(tx *bolt.Tx) error {
-		for _, v := range es.dataBuckets {
-			_, err := tx.CreateBucketIfNotExists([]byte(v))
-			if err != nil {
-				return fmt.Errorf("unable to create bucket: %s", err)
-			}
-		}
-		return nil
-	})
 
+	// automigrate
+	es.db.AutoMigrate(&Player{},&Match{})
+
+	// player mangement
 	go func() {
 		for {
 			select {
-			case msg := <-es.playerAdd:
-				es.db.Update(func(tx *bolt.Tx) error {
-					b := tx.Bucket([]byte(players))
-					mb, err := msg.p.GobEncode()
-					if err != nil {
-						println("player gob fail")
-						return err
-					}
-					err = b.Put([]byte(strconv.FormatUint(msg.ID, 16)), mb)
-
-					return nil
-				})
-				es.TotalPlayers = es.TotalPlayers + 1
-
-				msg.ret <- msg.p
-				es.wg.Done()
-			case msg := <-es.playerUpdate:
-				es.db.Update(func(tx *bolt.Tx) error {
-					b := tx.Bucket([]byte(players))
-					mb, err := msg.p.GobEncode()
-					if err != nil {
-						println("player gob fail")
-						return err
-					}
-					err = b.Put([]byte(strconv.FormatUint(msg.ID, 16)), mb)
-					bs := b.Stats()
-					es.TotalPlayers = bs.KeyN
-					return nil
-				})
+ 			case msg := <-es.playerUpdate:
+				if es.db.NewRecord(msg.p) {
+					r, err := es.db.Create(&msg.p)
+					msg.err = r.Error
+					msg.p = r.Value
+					es.TotalPlayers = es.TotalPlayers + 1
+				} else {
+					r := es.db.Save(msg.p)
+					msg.err = e.Error
+					msg.p = r.Value 
+				}
 				msg.ret <- msg.p
 				es.wg.Done()
 			case msg := <-es.getPlayer:
-				es.db.View(func(tx *bolt.Tx) error {
-					b := tx.Bucket([]byte(players))
-					v := b.Get([]byte(strconv.FormatUint(msg.ID, 16)))
-					p := &Player{}
-					err := p.GobDecode(v)
-					if err != nil {
-						return err
-					}
-					msg.ret <- p
-					return nil
-				})
+				r := es.db.First(&msg.p)
+				msg.p = r.Value
+				msg.err = r.Error
+				msg.ret <- msg.p
 				es.wg.Done()
+			 
 			}
 		}
 	}()
 
+	// match management
 	go func() {
 		for {
 			select {
 			case msg := <-es.updateMatch:
-				es.db.Update(func(tx *bolt.Tx) error {
-					b := tx.Bucket([]byte(matchHistory))
-					mb, err := msg.GobEncode()
-					if err != nil {
-						println("gob fail")
-						return err
-					}
-					err = b.Put([]byte(strconv.FormatUint(msg.ID, 16)), mb)
-					return nil
-				})
+				if es.db.NewRecord(msg.m) {
+					r := es.db.Create(&msg)
+					msg.p = r.Value
+					msg.err = r.Error
+				} else {
+					// player already exists
+					msg.err = fmt.Error("Match already exists")
+				}
+				msg.ret <- msg.p
 				es.wg.Done()
-			}
-		}
-	}()
 
-	go func() {
-		for {
-			select {
-			case msg := <-es.updateUniqueMatches:
-				es.UniqueMatches[msg] = es.UniqueMatches[msg] + 1
-				es.wg.Done()
 			}
 		}
 	}()
@@ -171,20 +140,17 @@ func (es *EloSim) Start() {
 
 func (es *EloSim) GetPlayer(id uint64) *Player {
 	es.wg.Add(1)
-	pr := &playerRequest{ID: id, ret: make(chan *Player)}
+	pr := &playerRequest{p: &Player{ID:id}, ret: make(chan *Player)}
 	es.getPlayer <- pr
 	return <-pr.ret
 }
 
 // AddPlayer add an eligible player to the simulation
 func (es *EloSim) AddPlayer() uint64 {
-	newID := es.newPlayerID()
-	p := &Player{}
-	p.CreatedAt = time.Now()
-	p.Elo = es.BaseElo
-	p.ID = newID
-	pr := &playerRequest{p: p, ret: make(chan *Player)}
 	es.wg.Add(1)
+ 	p := &Player{}
+ 	p.Elo = es.BaseElo
+	pr := &playerRequest{p: p, ret: make(chan *Player)}
 	es.playerUpdate <- pr
 	msg := <-pr.ret
 	return msg.ID
@@ -198,32 +164,17 @@ func (es *EloSim) UpdatePlayer(p *Player) uint64 {
 	return msg.ID
 }
 
-func (es *EloSim) UpdateUniqueMatch(m string) {
-	es.wg.Add(1)
-	es.updateUniqueMatches <- m
-}
 
 func (es *EloSim) Stop() {
 	es.wg.Wait()
 	es.EndTime = time.Now()
 }
 
-// newPlayerID gernerate a new player ID
-func (es *EloSim) newPlayerID() uint64 {
-	return uint64(es.TotalPlayers)
-}
-
-// newMatchID generate a new match ID
-func (es *EloSim) newMatchID() uint64 {
-	rand.Seed(time.Now().UnixNano() * rand.Int63() / 2)
-	dt := time.Now().UnixNano() * rand.Int63()
-
-	return uint64(dt)
-}
-
-func (es *EloSim) AddMatch(m *Match) {
+func (es *EloSim) AddMatch(m *Match) *Match {
 	es.wg.Add(1)
-	es.updateMatch <- m
+	mr := newMatchRequest(m)
+	es.updateMatch <- mr
+	return < mr.ret
 }
 
 // SetMatchMaking set the match making method to generate a PendingMatch
@@ -254,9 +205,9 @@ func (es *EloSim) RandomSelectPlayers() *PendingMatch {
 	return &PendingMatch{TeamA: []uint64{pa}, TeamB: []uint64{pb}}
 }
 
-func (es *EloSim) SimMatch(pm *PendingMatch) {
+func (es *EloSim) SimMatch(pm *PendingMatch) uint64 {
 	es.wg.Add(1)
-	match := &Match{ID: es.newMatchID(), TeamA: pm.TeamA, TeamB: pm.TeamB}
+	match := &Match{TeamA: pm.TeamA, TeamB: pm.TeamB}
 	match.Start()
 
 	if len(match.TeamA) == 1 && len(match.TeamB) == 1 {
@@ -268,7 +219,6 @@ func (es *EloSim) SimMatch(pm *PendingMatch) {
 		pa.StartGame()
 		pb.StartGame()
 		// add unique match check
-		es.UpdateUniqueMatch(fmt.Sprintf("%X%X", match.TeamA[0], match.TeamB[0]))
 
 		if rand.Float64() > calcEloWinChance(pa.Elo, pb.Elo) {
 			win = true
@@ -290,8 +240,8 @@ func (es *EloSim) SimMatch(pm *PendingMatch) {
 	}
 
 	match.Stop()
-	es.AddMatch(match)
 	es.wg.Done()
+	return es.AddMatch(match)
 }
 
 type EloSimReport struct {

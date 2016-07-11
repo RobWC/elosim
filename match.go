@@ -1,23 +1,29 @@
 package main
 
 import (
-	"encoding/json"
 	"time"
+
+	"github.com/jinzhu/gorm"
 )
 
+// PendingMatch a match that is pending between two parties
 type PendingMatch struct {
+	// TeamA the first team
 	TeamA []uint64
+	// TeamB the second team
 	TeamB []uint64
 }
 
+// Match a record of a match between two teams
 type Match struct {
-	ID        uint64    `json:"id,string"`
+	ID        uint64    `json:"id,string" gorm:"primary_key;not null;AUTO_INCREMENT;unique"`
 	TeamA     []uint64  `json:"teama"`
 	TeamB     []uint64  `json:"teamb"`
 	Winner    int       `json:"winner"`
 	Loser     int       `json:"loser"`
 	StartTime time.Time `json:"start"`
 	EndTime   time.Time `json:"end"`
+	gorm.Model
 }
 
 func (m *Match) AddPlayers(teamA uint64, teamB uint64) {
@@ -41,20 +47,4 @@ func (m *Match) Start() {
 
 func (m *Match) Stop() {
 	m.EndTime = time.Now()
-}
-
-func (m *Match) GobEncode() ([]byte, error) {
-	mj, err := json.Marshal(m)
-	if err != nil {
-		return nil, err
-	}
-	return []byte(mj), nil
-}
-
-func (m *Match) GobDecode(data []byte) error {
-	err := json.Unmarshal(data, m)
-	if err != nil {
-		return err
-	}
-	return nil
 }
