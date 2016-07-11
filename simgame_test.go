@@ -4,7 +4,7 @@ import "testing"
 
 func TestBasicEloEloSim(t *testing.T) {
 	baseElo := 1200
-	es := NewEloSim(baseElo, "tbees.db")
+	es := NewEloSim(baseElo, "tbees")
 	es.Start()
 	playerCount := 100
 	for i := 0; i < playerCount; i++ {
@@ -21,7 +21,7 @@ func TestBasicEloEloSim(t *testing.T) {
 
 func TestRandomMatchMakingEloSim(t *testing.T) {
 	baseElo := 1050
-	es := NewEloSim(baseElo, "trmmes.db")
+	es := NewEloSim(baseElo, "trmmes")
 	es.Start()
 	playerCount := 10000
 	for i := 0; i < playerCount; i++ {

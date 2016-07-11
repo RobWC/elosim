@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/sqlite"
+	_ "github.com/jinzhu/gorm/dialects/mysql"
 )
 
 const (
@@ -79,14 +79,14 @@ func (es *EloSim) Start() {
 
 	// open database
 	var err error
-	es.db, err = gorm.Open("sqlite3", es.dbname)
+	es.db, err = gorm.Open("mysql", fmt.Sprintf("stats:testpants@/%s?charset=utf8&parseTime=True&loc=Local", es.dbname))
 	if err != nil {
 		panic(err)
 	}
 
 	// automigrate
-	es.db.CreateTable(&Player{})
-	es.db.CreateTable(&Match{})
+	es.db.DropTable(&Player{}, &Match{})
+	es.db.AutoMigrate(&Player{}, &Match{})
 
 	// player mangement
 	go func() {
@@ -96,18 +96,15 @@ func (es *EloSim) Start() {
 				if es.db.NewRecord(msg.p) {
 					r := es.db.Create(&msg.p)
 					msg.err = r.Error
-					msg.p = r.Value.(*Player)
 					es.TotalPlayers = es.TotalPlayers + 1
 				} else {
 					r := es.db.Save(msg.p)
 					msg.err = r.Error
-					msg.p = r.Value.(*Player)
 				}
 				msg.ret <- msg.p
 				es.wg.Done()
 			case msg := <-es.getPlayer:
 				r := es.db.First(&msg.p)
-				msg.p = r.Value.(*Player)
 				msg.err = r.Error
 				msg.ret <- msg.p
 				es.wg.Done()
@@ -123,7 +120,6 @@ func (es *EloSim) Start() {
 			case msg := <-es.updateMatch:
 				if es.db.NewRecord(msg.m) {
 					r := es.db.Create(&msg)
-					msg.m = r.Value.(*Match)
 					msg.err = r.Error
 				} else {
 					// match already exists
@@ -201,7 +197,7 @@ func (es *EloSim) RandomSelectPlayers() *PendingMatch {
 	pb = uint64(rand.Int63n(int64(tp - 1)))
 
 	log.Println("Player chosesn")
-	return &PendingMatch{TeamA: []uint64{pa}, TeamB: []uint64{pb}}
+	return &PendingMatch{TeamA: pa, TeamB: pb}
 }
 
 func (es *EloSim) SimMatch(pm *PendingMatch) uint64 {
@@ -209,34 +205,31 @@ func (es *EloSim) SimMatch(pm *PendingMatch) uint64 {
 	match := &Match{TeamA: pm.TeamA, TeamB: pm.TeamB}
 	match.Start()
 
-	if len(match.TeamA) == 1 && len(match.TeamB) == 1 {
-		win := false
+	win := false
 
-		pa := es.GetPlayer(match.TeamA[0])
-		pb := es.GetPlayer(match.TeamB[0])
-		log.Println("got players")
-		pa.StartGame()
-		pb.StartGame()
-		// add unique match check
+	pa := es.GetPlayer(match.TeamA)
+	pb := es.GetPlayer(match.TeamB)
+	log.Println("got players")
+	pa.StartGame()
+	pb.StartGame()
+	// add unique match check
 
-		if rand.Float64() > calcEloWinChance(pa.Elo, pb.Elo) {
-			win = true
-			match.TeamAWin()
-			pa.Wins = pa.Wins + 1
-			pb.Losses = pb.Losses + 1
-		} else {
-			match.TeamBWin()
-			pb.Wins = pb.Wins + 1
-			pb.Losses = pa.Losses + 1
-		}
-		pa.Elo, pb.Elo = eloBattle(pa.Elo, pb.Elo, win)
-		// add match history
-		es.UpdatePlayer(pa)
-		es.UpdatePlayer(pb)
-		pa.EndGame()
-		pb.EndGame()
-
+	if rand.Float64() > calcEloWinChance(pa.Elo, pb.Elo) {
+		win = true
+		match.TeamAWin()
+		pa.Wins = pa.Wins + 1
+		pb.Losses = pb.Losses + 1
+	} else {
+		match.TeamBWin()
+		pb.Wins = pb.Wins + 1
+		pb.Losses = pa.Losses + 1
 	}
+	pa.Elo, pb.Elo = eloBattle(pa.Elo, pb.Elo, win)
+	// add match history
+	es.UpdatePlayer(pa)
+	es.UpdatePlayer(pb)
+	pa.EndGame()
+	pb.EndGame()
 
 	match.Stop()
 	es.wg.Done()
