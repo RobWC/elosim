@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"log"
+	"testing"
+	"time"
+)
 
 func TestBasicEloEloSim(t *testing.T) {
 	baseElo := 1200
@@ -21,28 +25,27 @@ func TestBasicEloEloSim(t *testing.T) {
 
 func TestRandomMatchMakingEloSim(t *testing.T) {
 	baseElo := 1050
-	es := NewEloSim(baseElo, "trmmes")
+	es := NewEloSim(baseElo, "ttees")
 	es.Start()
-	playerCount := 10000
+
+	log.Println("Making Players", time.Now())
+	playerCount := 100
 	for i := 0; i < playerCount; i++ {
 		es.AddPlayer()
 	}
+
+	log.Println("Making Players Complete", time.Now())
 	if es.TotalPlayers < playerCount {
 		t.Fail()
 	}
 
-	t.Logf("Found %d players", playerCount)
-
+	log.Println("Making Matches", time.Now())
 	es.SetMatchMaking(es.RandomSelectPlayers)
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 100000; i++ {
 		es.SimMatch(es.GenerateMatch())
 	}
+	log.Println("Making Matches Complete", time.Now())
 
 	es.Stop()
-	//	for i := range es.MatchHistory {
-	//		t.Logf("%#v", es.MatchHistory[i])
-	//nid := fmt.Sprintf("%X%X", es.MatchHistory[i].TeamA[0], es.MatchHistory[i].TeamB[0])
-	//t.Log(es.UniqueMatches[nid])
-	//	}
 	t.Logf("%#v", es.FinalReport())
 }

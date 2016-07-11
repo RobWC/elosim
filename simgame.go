@@ -31,14 +31,13 @@ type EloSim struct {
 	StartTime      time.Time
 	EndTime        time.Time
 
-	playerUpdate        chan *playerRequest
-	getPlayer           chan *playerRequest
-	updateMatch         chan *matchRequest
-	updateUniqueMatches chan string
-	db                  *gorm.DB
-	dataBuckets         []string
-	dbname              string
-	TotalPlayers        int
+	playerUpdate chan *playerRequest
+	getPlayer    chan *playerRequest
+	updateMatch  chan *matchRequest
+	db           *gorm.DB
+	dataBuckets  []string
+	dbname       string
+	TotalPlayers int
 }
 
 type playerRequest struct {
@@ -64,13 +63,12 @@ func newMatchRequest(m *Match) *matchRequest {
 // Create a new sim and set the base elo with be
 func NewEloSim(be int, dbname string) *EloSim {
 	return &EloSim{UniqueMatches: make(map[string]int),
-		playerUpdate:        make(chan *playerRequest, 1000000),
-		getPlayer:           make(chan *playerRequest, 1000000),
-		updateMatch:         make(chan *matchRequest, 1000000),
-		updateUniqueMatches: make(chan string, 1000000),
-		BaseElo:             be,
-		dbname:              dbname,
-		dataBuckets:         simDataBuckets}
+		playerUpdate: make(chan *playerRequest, 1000000),
+		getPlayer:    make(chan *playerRequest, 1000000),
+		updateMatch:  make(chan *matchRequest, 1000000),
+		BaseElo:      be,
+		dbname:       dbname,
+		dataBuckets:  simDataBuckets}
 }
 
 // Start set elo sim background tasks
@@ -84,6 +82,10 @@ func (es *EloSim) Start() {
 		panic(err)
 	}
 
+	// set db options
+	es.db.DB().SetMaxIdleConns(10)
+	es.db.DB().SetMaxOpenConns(100)
+
 	// automigrate
 	es.db.DropTable(&Player{}, &Match{})
 	es.db.AutoMigrate(&Player{}, &Match{})
@@ -93,21 +95,25 @@ func (es *EloSim) Start() {
 		for {
 			select {
 			case msg := <-es.playerUpdate:
-				if es.db.NewRecord(msg.p) {
-					r := es.db.Create(&msg.p)
-					msg.err = r.Error
-					es.TotalPlayers = es.TotalPlayers + 1
-				} else {
-					r := es.db.Save(msg.p)
-					msg.err = r.Error
-				}
-				msg.ret <- msg.p
-				es.wg.Done()
+				go func() {
+					if es.db.NewRecord(msg.p) {
+						r := es.db.Create(msg.p)
+						msg.err = r.Error
+						es.TotalPlayers = es.TotalPlayers + 1
+					} else {
+						r := es.db.Save(msg.p)
+						msg.err = r.Error
+					}
+					msg.ret <- msg.p
+					es.wg.Done()
+				}()
 			case msg := <-es.getPlayer:
-				r := es.db.First(&msg.p)
-				msg.err = r.Error
-				msg.ret <- msg.p
-				es.wg.Done()
+				go func() {
+					r := es.db.First(&msg.p)
+					msg.err = r.Error
+					msg.ret <- msg.p
+					es.wg.Done()
+				}()
 
 			}
 		}
@@ -118,16 +124,17 @@ func (es *EloSim) Start() {
 		for {
 			select {
 			case msg := <-es.updateMatch:
-				if es.db.NewRecord(msg.m) {
-					r := es.db.Create(&msg)
-					msg.err = r.Error
-				} else {
-					// match already exists
-					msg.err = fmt.Errorf("%s", "Match already exists")
-				}
-				msg.ret <- msg.m
-				es.wg.Done()
-
+				go func() {
+					if es.db.NewRecord(msg.m) {
+						r := es.db.Create(msg.m)
+						msg.err = r.Error
+					} else {
+						// match already exists
+						msg.err = fmt.Errorf("%s", "Match already exists")
+					}
+					msg.ret <- msg.m
+					es.wg.Done()
+				}()
 			}
 		}
 	}()
@@ -185,7 +192,6 @@ func (es *EloSim) GenerateMatch() *PendingMatch {
 func (es *EloSim) RandomSelectPlayers() *PendingMatch {
 	pa, pb := uint64(0), uint64(0)
 
-	log.Println("TP XXX", es.TotalPlayers)
 	tp := es.TotalPlayers
 	if tp < 2 {
 		tp = 2
@@ -196,7 +202,6 @@ func (es *EloSim) RandomSelectPlayers() *PendingMatch {
 	rand.Seed(time.Now().UnixNano() * rand.Int63() * 2)
 	pb = uint64(rand.Int63n(int64(tp - 1)))
 
-	log.Println("Player chosesn")
 	return &PendingMatch{TeamA: pa, TeamB: pb}
 }
 
@@ -209,7 +214,7 @@ func (es *EloSim) SimMatch(pm *PendingMatch) uint64 {
 
 	pa := es.GetPlayer(match.TeamA)
 	pb := es.GetPlayer(match.TeamB)
-	log.Println("got players")
+
 	pa.StartGame()
 	pb.StartGame()
 	// add unique match check
@@ -226,13 +231,15 @@ func (es *EloSim) SimMatch(pm *PendingMatch) uint64 {
 	}
 	pa.Elo, pb.Elo = eloBattle(pa.Elo, pb.Elo, win)
 	// add match history
-	es.UpdatePlayer(pa)
-	es.UpdatePlayer(pb)
 	pa.EndGame()
 	pb.EndGame()
 
 	match.Stop()
 	es.wg.Done()
+
+	es.UpdatePlayer(pa)
+	es.UpdatePlayer(pb)
+
 	em := es.AddMatch(match)
 	return em.ID
 }
@@ -256,28 +263,33 @@ func (es *EloSim) FinalReport() *EloSimReport {
 
 	esr.StartTime = es.StartTime
 	esr.EndTime = es.EndTime
-	esr.TotalPlayers = es.TotalPlayers
-	esr.UniqueMatches = len(es.UniqueMatches)
 
-	// determine highest and lowest elo
-	/*for _, v := range es.Players {
-		esr.AverageElo = esr.AverageElo + v.Elo
+	es.db.Model(&Player{}).Count(&esr.TotalPlayers)
+	es.db.Model(&Match{}).Count(&esr.TotalMatches)
+	es.db.Model(&Match{}).Select("distinct teama,teamb").Count(&esr.UniqueMatches)
+	hep := &Player{}
+	es.db.Order("elo desc").Model(&Player{}).First(&hep)
+	esr.HighestElo = hep.Elo
+	esr.HighestEloPlayer = hep.ID
 
-		// check highest elo
-		if v.Elo > esr.HighestElo {
-			esr.HighestElo = v.Elo
-			esr.HighestEloPlayer = v.ID
+	lep := &Player{}
+	es.db.Order("elo").Model(&Player{}).First(&lep)
+	esr.LowestElo = lep.Elo
+	esr.LowestEloPlayer = lep.ID
+
+	r, err := es.db.Table("players").Select("CEIL(AVG(elo))").Rows()
+	if err != nil {
+		log.Println(err)
+	}
+
+	for r.Next() {
+		err = r.Scan(&esr.AverageElo)
+		if err != nil {
+			log.Println(err)
 		}
+	}
 
-		if esr.LowestElo > v.Elo || esr.LowestElo == 0 {
-			esr.LowestElo = v.Elo
-			esr.LowestEloPlayer = v.ID
-		}
-
-	}*/
-	esr.AverageElo = esr.AverageElo / es.TotalPlayers
-
-	// bracket players
+	// bracket playerss
 
 	/*	for _, v := range es.Players {
 			if v.Elo <= esr.AverageElo {
