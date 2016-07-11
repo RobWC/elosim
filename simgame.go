@@ -4,19 +4,18 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/jinzhu/gorm"
-        _ "github.com/jinzhu/gorm/dialects/sqlite"
+	_ "github.com/jinzhu/gorm/dialects/sqlite"
 )
 
 const (
 	BasePlayerID = 90000
 	IDIncrement  = 32
 	matchHistory = "matchHistory"
-	players      = "player"s
+	players      = "player"
 	uniMatches   = "uniqueMatches"
 )
 
@@ -34,7 +33,7 @@ type EloSim struct {
 
 	playerUpdate        chan *playerRequest
 	getPlayer           chan *playerRequest
-	updateMatch         chan *Match
+	updateMatch         chan *matchRequest
 	updateUniqueMatches chan string
 	db                  *gorm.DB
 	dataBuckets         []string
@@ -66,8 +65,8 @@ func newMatchRequest(m *Match) *matchRequest {
 func NewEloSim(be int, dbname string) *EloSim {
 	return &EloSim{UniqueMatches: make(map[string]int),
 		playerUpdate:        make(chan *playerRequest, 1000000),
- 		getPlayer:           make(chan *playerRequest, 1000000),
-		updateMatch:         make(chan *Match, 1000000),
+		getPlayer:           make(chan *playerRequest, 1000000),
+		updateMatch:         make(chan *matchRequest, 1000000),
 		updateUniqueMatches: make(chan string, 1000000),
 		BaseElo:             be,
 		dbname:              dbname,
@@ -86,32 +85,33 @@ func (es *EloSim) Start() {
 	}
 
 	// automigrate
-	es.db.AutoMigrate(&Player{},&Match{})
+	es.db.CreateTable(&Player{})
+	es.db.CreateTable(&Match{})
 
 	// player mangement
 	go func() {
 		for {
 			select {
- 			case msg := <-es.playerUpdate:
+			case msg := <-es.playerUpdate:
 				if es.db.NewRecord(msg.p) {
-					r, err := es.db.Create(&msg.p)
+					r := es.db.Create(&msg.p)
 					msg.err = r.Error
-					msg.p = r.Value
+					msg.p = r.Value.(*Player)
 					es.TotalPlayers = es.TotalPlayers + 1
 				} else {
 					r := es.db.Save(msg.p)
-					msg.err = e.Error
-					msg.p = r.Value 
+					msg.err = r.Error
+					msg.p = r.Value.(*Player)
 				}
 				msg.ret <- msg.p
 				es.wg.Done()
 			case msg := <-es.getPlayer:
 				r := es.db.First(&msg.p)
-				msg.p = r.Value
+				msg.p = r.Value.(*Player)
 				msg.err = r.Error
 				msg.ret <- msg.p
 				es.wg.Done()
-			 
+
 			}
 		}
 	}()
@@ -123,13 +123,13 @@ func (es *EloSim) Start() {
 			case msg := <-es.updateMatch:
 				if es.db.NewRecord(msg.m) {
 					r := es.db.Create(&msg)
-					msg.p = r.Value
+					msg.m = r.Value.(*Match)
 					msg.err = r.Error
 				} else {
 					// match already exists
-					msg.err = fmt.Error("Match already exists")
+					msg.err = fmt.Errorf("%s", "Match already exists")
 				}
-				msg.ret <- msg.p
+				msg.ret <- msg.m
 				es.wg.Done()
 
 			}
@@ -140,7 +140,7 @@ func (es *EloSim) Start() {
 
 func (es *EloSim) GetPlayer(id uint64) *Player {
 	es.wg.Add(1)
-	pr := &playerRequest{p: &Player{ID:id}, ret: make(chan *Player)}
+	pr := &playerRequest{p: &Player{ID: id}, ret: make(chan *Player)}
 	es.getPlayer <- pr
 	return <-pr.ret
 }
@@ -148,8 +148,8 @@ func (es *EloSim) GetPlayer(id uint64) *Player {
 // AddPlayer add an eligible player to the simulation
 func (es *EloSim) AddPlayer() uint64 {
 	es.wg.Add(1)
- 	p := &Player{}
- 	p.Elo = es.BaseElo
+	p := &Player{}
+	p.Elo = es.BaseElo
 	pr := &playerRequest{p: p, ret: make(chan *Player)}
 	es.playerUpdate <- pr
 	msg := <-pr.ret
@@ -164,7 +164,6 @@ func (es *EloSim) UpdatePlayer(p *Player) uint64 {
 	return msg.ID
 }
 
-
 func (es *EloSim) Stop() {
 	es.wg.Wait()
 	es.EndTime = time.Now()
@@ -174,7 +173,7 @@ func (es *EloSim) AddMatch(m *Match) *Match {
 	es.wg.Add(1)
 	mr := newMatchRequest(m)
 	es.updateMatch <- mr
-	return < mr.ret
+	return <-mr.ret
 }
 
 // SetMatchMaking set the match making method to generate a PendingMatch
@@ -241,7 +240,8 @@ func (es *EloSim) SimMatch(pm *PendingMatch) uint64 {
 
 	match.Stop()
 	es.wg.Done()
-	return es.AddMatch(match)
+	em := es.AddMatch(match)
+	return em.ID
 }
 
 type EloSimReport struct {
@@ -264,16 +264,6 @@ func (es *EloSim) FinalReport() *EloSimReport {
 	esr.StartTime = es.StartTime
 	esr.EndTime = es.EndTime
 	esr.TotalPlayers = es.TotalPlayers
-	err := es.db.View(func(tx *bolt.Tx) error {
-		// Assume bucket exists and has keys
-		b := tx.Bucket([]byte(matchHistory))
-		bs := b.Stats()
-		esr.TotalMatches = bs.KeyN
-		return nil
-	})
-	if err != nil {
-		println(err)
-	}
 	esr.UniqueMatches = len(es.UniqueMatches)
 
 	// determine highest and lowest elo

@@ -1,10 +1,6 @@
 package main
 
-import (
-	"time"
-
-	"github.com/jinzhu/gorm"
-)
+import "time"
 
 // PendingMatch a match that is pending between two parties
 type PendingMatch struct {
@@ -14,16 +10,17 @@ type PendingMatch struct {
 	TeamB []uint64
 }
 
+type Team []uint64
+
 // Match a record of a match between two teams
 type Match struct {
-	ID        uint64    `json:"id,string" gorm:"primary_key;not null;AUTO_INCREMENT;unique"`
-	TeamA     []uint64  `json:"teama"`
-	TeamB     []uint64  `json:"teamb"`
+	ID        uint64    `json:"id" gorm:"not null;primary_key;AUTO_INCREMENT;unique"`
+	TeamA     Team      `json:"teama"`
+	TeamB     Team      `json:"teamb"`
 	Winner    int       `json:"winner"`
 	Loser     int       `json:"loser"`
 	StartTime time.Time `json:"start"`
 	EndTime   time.Time `json:"end"`
-	gorm.Model
 }
 
 func (m *Match) AddPlayers(teamA uint64, teamB uint64) {

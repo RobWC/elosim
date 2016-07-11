@@ -1,10 +1,6 @@
 package main
 
-import (
-	"sync"
-
-	"github.com/jinzhu/gorm"
-)
+import "sync"
 
 type Player struct {
 	ID     uint64 `json:"id" gorm:"not null;primary_key;AUTO_INCREMENT;unique"`
@@ -13,7 +9,6 @@ type Player struct {
 	Losses uint   `json:"losses"`
 	InGame bool   `json:"ingame"`
 	sync.Mutex
-	gorm.Model
 }
 
 func (p *Player) StartGame() {
